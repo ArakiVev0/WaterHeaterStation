@@ -1,5 +1,5 @@
 ## GPIO
-- GPIO 17 Flow meter control (Output)
+- GPIO 17 Valve control (Output)
 - GPIO 21 Display A0
 - GPIO 25 Display Reset
 
