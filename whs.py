@@ -1,5 +1,5 @@
 import RPi.GPIO as GPIO
-from max1239 import Max1239
+from max1238 import Max1238
 from time import time
 from threading import Thread
 
@@ -33,7 +33,7 @@ GPIO.setup(VALVE_PIN, GPIO.OUT, initial=GPIO.LOW)
 # GPIO.setup(21, GPIO.OUT)
 # GPIO.setup(25, GPIO.OUT)
 
-adc = Max1239()
+adc = Max1238()
 adc.setup_adc()
 
 
