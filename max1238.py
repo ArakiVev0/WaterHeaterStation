@@ -40,7 +40,7 @@ class RefrenceVoltage(Enum):
     InternalReference_AlwaysON_ReferenceOutput = 0b111
 
 
-class Max1239:
+class Max1238:
     def __init__(self, address: int = 0x35, bus_num: int = 1) -> None:
         self.address = address
         self.bus = SMBus(bus_num)
