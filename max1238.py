@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional
-from smbus2 import SMBus
+from smbus2 import SMBus, i2c_msg
 import time
 
 
@@ -32,12 +32,12 @@ class ScanMode(Enum):
 
 
 class RefrenceVoltage(Enum):
-    VDD_Analog_input = 0b000
-    ExternalReference = 0b010
-    InternalReference_AlwaysOFF_AnalogInput = 0b100
-    InternalReference_AlwaysON_AnalogInput = 0b101
-    InternalReference_AlwaysOFF_ReferenceOutput = 0b110
-    InternalReference_AlwaysON_ReferenceOutput = 0b111
+    VDD_AnalogIn = 0b000
+    ExternalRef = 0b010
+    InternalRef_AlwaysOFF_AnalogIn = 0b100
+    InternalRef_AlwaysON_AnalogIn = 0b101
+    InternalRef_AlwaysOFF_RefOut = 0b110
+    InternalRef_AlwaysON_RefOut = 0b111
 
 
 class Max1238:
@@ -54,7 +54,7 @@ class Max1238:
     ) -> int:
         return (
             (1 << 7)  # Setup command
-            | (referenceVoltage.value << 6)
+            | (referenceVoltage.value << 4)
             | (clock.value << 3)
             | (polarity.value << 2)
             | (reset.value << 1)
@@ -70,18 +70,17 @@ class Max1238:
         if not 0 <= channel <= 11:
             raise ValueError("Channel must be between 0 and 11")
 
-        return (0 << 7) | (scan.value << 6) | (channel << 4) | (mode.value)
+        return (0 << 7) | (scan.value << 5) | (channel << 1) | (mode.value)
 
     def setup_adc(
         self,
-        referenceVoltage: RefrenceVoltage = RefrenceVoltage.InternalReference_AlwaysON_AnalogInput,
+        referenceVoltage: RefrenceVoltage = RefrenceVoltage.InternalRef_AlwaysON_AnalogIn,
         clock: ClockType = ClockType.Internal,
         polarity: Polarity = Polarity.Unipolar,
         reset: ResetMode = ResetMode.NoAction,
     ) -> None:
         setup_byte = self._build_setup_byte(referenceVoltage, clock, polarity, reset)
         self.bus.write_byte(self.address, setup_byte)
-        time.sleep(0.001)
 
     def read_single(
         self,
@@ -91,9 +90,13 @@ class Max1238:
         try:
             config_byte = self._build_config_byte(ScanMode.NoScan, channel, mode)
             self.bus.write_byte(self.address, config_byte)
-            time.sleep(0.001)
-            data = self.bus.read_i2c_block_data(self.address, 0x00, 2)
-            return (data[0] << 4) | (data[1] >> 4)
+
+            read = i2c_msg.read(self.address, 2)
+            self.bus.i2c_rdwr(read)
+
+            msb, lsb = list(read)
+
+            return ((msb & 0x0F) << 8) | lsb
         except Exception as e:
             print(f"Read failed: {e}")
             return None
@@ -111,12 +114,15 @@ class Max1238:
             ScanMode.ScanUpToChannel, start_channel + count - 1, mode
         )
         self.bus.write_byte(self.address, config_byte)
-        time.sleep(0.001)
 
         result = []
         for _ in range(count):
-            data = self.bus.read_i2c_block_data(self.address, 0x00, 2)
-            value = (data[0] << 4) | (data[1] >> 4)
+            read = i2c_msg.read(self.address, 2)
+            self.bus.i2c_rdwr(read)
+
+            msb, lsb = list(read)
+
+            value = ((msb << 0x0F) << 8) | lsb
             result.append(value)
 
         return result
