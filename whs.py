@@ -32,7 +32,6 @@ GPIO.setup(VALVE_PIN, GPIO.OUT, initial=GPIO.LOW)
 adc = Max1238()
 adc.setup_adc()
 
-
 def voltage_to_val(V_meas, max, min) -> float:
     R_shunt = 120
     I_loop = V_meas / R_shunt
@@ -45,6 +44,15 @@ def read_voltage(channel: int) -> float:
         return -1
     return (value / ADC_MAX) * ADC_VREF
 
+def read_temp() -> dict[string, float]:
+    res = {}
+    res['Hot'] =  voltage_to_val(read_voltage(CH_HOT), T_max, T_min)
+    res['Cold'] =   voltage_to_val(read_voltage(CH_COLD), T_max, T_min)
+    res['Ambient'] =  voltage_to_val(read_voltage(CH_AMBIENT), T_max, T_min)
+    retunr res
+
+def read_volume() -> float:
+    return voltage_to_val(read_voltage(CH_FLOW), Q_max, Q_min)
 
 def draw_water(target_vol: float) -> None:
     if target_vol <= 0:
@@ -59,13 +67,11 @@ def draw_water(target_vol: float) -> None:
 
     while volume < target_vol:
         elapsed = time() - start_time
+        
+        temp = read_temp()
+        volume = read_volume()
 
-        hot = voltage_to_val(read_voltage(CH_HOT), T_max, T_min)
-        cold = voltage_to_val(read_voltage(CH_COLD), T_max, T_min)
-        amb = voltage_to_val(read_voltage(CH_AMBIENT), T_max, T_min)
-        volume = voltage_to_val(read_voltage(CH_FLOW), Q_max, Q_min)
-
-        print(f"{hot:.2f} {cold:.2f} {amb:.2f} {volume:.2f}")
+        print(f"{temp["Hot"]:.2f} {temp["Cold"]:.2f} {temp["Ambient"]:.2f} {volume:.2f}")
         if elapsed > 180:
             print("Timeout Error")
             break
