@@ -29,10 +29,6 @@ GPIO.setmode(GPIO.BCM)
 
 GPIO.setup(VALVE_PIN, GPIO.OUT, initial=GPIO.LOW)
 
-# TODO: Display Stuff gotta ask nawaf
-# GPIO.setup(21, GPIO.OUT)
-# GPIO.setup(25, GPIO.OUT)
-
 adc = Max1238()
 adc.setup_adc()
 
@@ -76,6 +72,3 @@ def draw_water(target_vol: float) -> None:
 
     GPIO.output(VALVE_PIN, GPIO.LOW)
     print(f"Volume drawn: {volume:.2f} gallon(s)")
-
-
-thread_draw = Thread(target=draw_water, args=[20])
