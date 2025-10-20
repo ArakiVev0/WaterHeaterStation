@@ -1,85 +1,77 @@
+from __future__ import annotations
+
 from enum import Enum
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Union, List, Dict
 from smbus2 import SMBus, i2c_msg
 import time
 
+
 class InputMode(Enum):
-    SingleEnded = 1
-    Differential = 0
+    SingleEnded = 1   # SGL/DIF = 1
+    Differential = 0  # SGL/DIF = 0
 
 
 class ClockType(Enum):
-    External = 0
-    Internal = 1
+    External = 1  # CLK = 1
+    Internal = 0  # CLK = 0
 
 
 class Polarity(Enum):
-    Unipolar = 0
-    Bipolar = 1
+    Unipolar = 0   # BIP/UNI = 0
+    Bipolar = 1    # BIP/UNI = 1
 
 
 class ResetMode(Enum):
-    Reset = 0
-    NoAction = 1
+    Reset = 0      # RST = 0
+    NoAction = 1   # RST = 1
 
 
 class ScanMode(Enum):
-    ScanAIN0ToCS = 0b00
+    # SCAN[1:0] (Table 5)
+    ScanAIN0ToCS   = 0b00
     RepeatSelect8x = 0b01
-    ScanAIN6ToCS = 0b10
+    ScanAIN6ToCS   = 0b10
     ConvertSelected = 0b11
 
 
-class RefrenceVoltage(Enum):
-    VDD_AnalogIn = 0b000
-    ExternalRef = 0b010
+class ReferenceVoltage(Enum):
+    # SEL[2:0] (Table 6)
+    VDD_AnalogIn                  = 0b000
+    ExternalRef                   = 0b010
     InternalRef_AlwaysOFF_AnalogIn = 0b100
-    InternalRef_AlwaysON_AnalogIn = 0b101
-    InternalRef_AlwaysOFF_RefOut = 0b110
-    InternalRef_AlwaysON_RefOut = 0b111
+    InternalRef_AlwaysON_AnalogIn  = 0b101
+    InternalRef_AlwaysOFF_RefOut    = 0b110
+    InternalRef_AlwaysON_RefOut     = 0b111
 
 
 class Max1238:
+    """
+    Minimal MAX1238 12-bit I²C ADC driver.
+
+    - Setup byte (REG=1): [REG SEL2 SEL1 SEL0 CLK BIP/UNI RST X]
+    - Config byte (REG=0): [REG SCAN1 SCAN0 CS3 CS2 CS1 CS0 SGL/DIF]
+
+    Reading returns 12-bit results as ((MSB&0x0F)<<8)|LSB.
+    """
     def __init__(self, address: int = 0x35, bus_num: int = 1) -> None:
         self.address = address
         self.bus = SMBus(bus_num)
 
-    def _build_setup_byte(
+    # ---------- Low-level I2C helper ----------
+    def _xfer(
         self,
-        referenceVoltage: RefrenceVoltage,
-        clock: ClockType,
-        polarity: Polarity,
-        reset: ResetMode,
-    ) -> int:
-        return (
-            (1 << 7)  # Setup command
-            | (referenceVoltage.value << 4)
-            | (clock.value << 3)
-            | (polarity.value << 2)
-            | (reset.value << 1)
-            | 0
-        )
-
-    def _build_config_byte(
-        self,
-        scan: ScanMode,
-        channel: int,
-        mode: InputMode,
-    ) -> int:
-       ) -> list[int]:
+        write_bytes: Optional[Union[int, Sequence[int]]] = None,
+        read_len: int = 0,
+        retries: int = 1,
+        retry_delay_s: float = 0.002,
+    ) -> List[int]:
         """
-        Perform one atomic IÂ²C transaction to this device:
-        (optional) write_bytes  -> repeated START -> (optional) read_len bytes.
-
-        Returns a list[int] of read bytes (0..255). If read_len == 0, returns [].
-
-        Notes for MAX1238:
-        - With internal clock, the READ triggers conversion; device may stretch SCL.
-        - Use this for: config-write + read-2, multi-channel FIFO reads, setup writes, etc.
+        One atomic I²C transaction: optional write -> repeated START -> optional read.
+        Returns list[int] of length read_len (or []).
         """
-        # Normalize write_bytes to a list of ints (0..255)
+        # Normalize write payload
         if write_bytes is None:
-            to_write: Optional[list[int]] = None
+            to_write: Optional[List[int]] = None
         elif isinstance(write_bytes, int):
             if not (0 <= write_bytes <= 255):
                 raise ValueError("write byte out of range (0..255)")
@@ -93,7 +85,7 @@ class Max1238:
             raise ValueError("read_len must be >= 0")
 
         attempt = 0
-        last_err = None
+        last_err: Optional[BaseException] = None
         while attempt <= retries:
             try:
                 msgs = []
@@ -105,63 +97,96 @@ class Max1238:
                     return []
 
                 self.bus.i2c_rdwr(*msgs)
-
-                if read_len:
-                    return list(msgs[-1])  # bytes from the read message
-                return []
-            except OSError as e:  # bus errors, NACK, etc.
+                return list(msgs[-1]) if read_len else []
+            except OSError as e:
                 last_err = e
                 if attempt == retries:
                     raise
                 time.sleep(retry_delay_s)
                 attempt += 1
 
-        # Shouldn't reach here
+        # Should not get here
         if last_err:
             raise last_err
         return []
 
+    # ---------- Byte builders ----------
+    def _build_setup_byte(
+        self,
+        referenceVoltage: ReferenceVoltage,
+        clock: ClockType,
+        polarity: Polarity,
+        reset: ResetMode,
+    ) -> int:
+        # REG=1, then SEL[2:0], CLK, BIP/UNI, RST, X
+        return (
+            (1 << 7)
+            | (referenceVoltage.value << 4)
+            | (clock.value << 3)
+            | (polarity.value << 2)
+            | (reset.value << 1)
+            | 0
+        )
+
+    def _build_config_byte(
+        self,
+        scan: ScanMode,
+        channel: int,
+        mode: InputMode,
+    ) -> int:
+        if not (0 <= channel <= 11):
+            raise ValueError("channel must be 0..11 for MAX1238")
+        # REG=0, SCAN[1:0], CS[3:0], SGL/DIF
+        return (
+            (0 << 7)
+            | (scan.value << 5)
+            | ((channel & 0x0F) << 1)
+            | (mode.value & 0x01)
+        )
+
+    # ---------- High-level ops ----------
     def setup_adc(
         self,
-        referenceVoltage: RefrenceVoltage = RefrenceVoltage.InternalRef_AlwaysON_AnalogIn,
+        referenceVoltage: ReferenceVoltage = ReferenceVoltage.InternalRef_AlwaysON_AnalogIn,
         clock: ClockType = ClockType.Internal,
         polarity: Polarity = Polarity.Unipolar,
         reset: ResetMode = ResetMode.NoAction,
     ) -> None:
         setup_byte = self._build_setup_byte(referenceVoltage, clock, polarity, reset)
-               self._xfer(setup_byte, 0)
+        self._xfer(setup_byte, 0)
 
     def read_single(
         self,
         channel: int,
         mode: InputMode = InputMode.SingleEnded,
     ) -> Optional[int]:
-            cfg = self._build_config_byte(ScanMode.ConvertSelected, channel, mode)
+        cfg = self._build_config_byte(ScanMode.ConvertSelected, channel, mode)
+        msb, lsb = self._xfer(cfg, 2)
+        return ((msb & 0x0F) << 8) | lsb
 
-            msb, lsb = self._xfer(cfg, 2)
-            return ((msb & 0x0F) << 8) | lsb
-
-    def read_range(self, start_channel: int, end_channel: int, mode: InputMode = InputMode.SingleEnded) -> dict[int, int]:
-
+    def read_range(
+        self,
+        start_channel: int,
+        end_channel: int,
+        mode: InputMode = InputMode.SingleEnded,
+    ) -> Dict[int, int]:
         if not (0 <= start_channel <= end_channel <= 11):
             raise ValueError("Invalid channel range")
 
         if start_channel >= 6:
-            scan = ScanMode.ScanAIN6ToCS  
+            scan = ScanMode.ScanAIN6ToCS
             base = 6
         else:
-            scan = ScanMode.ScanAIN0ToCS  
+            scan = ScanMode.ScanAIN0ToCS
             base = 0
 
         cfg = self._build_config_byte(scan, end_channel, mode)
-
         n_res = (end_channel - base + 1)
         raw = self._xfer(cfg, 2 * n_res)
 
         words = [((raw[i] & 0x0F) << 8) | raw[i + 1] for i in range(0, len(raw), 2)]
         channels = list(range(base, end_channel + 1))
         results = dict(zip(channels, words))
-
         return {ch: results[ch] for ch in range(start_channel, end_channel + 1)}
 
     def read_multiple(
@@ -169,10 +194,9 @@ class Max1238:
         start_channel: int,
         count: int,
         mode: InputMode = InputMode.SingleEnded,
-    ) -> list[int]:
-
+    ) -> List[int]:
         if not (0 <= start_channel <= 11) or not (1 <= count <= 12 - start_channel):
-            raise ValueError("Invalid channel range")
+            raise ValueError("Invalid channel/count")
 
         end_ch = start_channel + count - 1
         if start_channel >= 6:
@@ -182,8 +206,21 @@ class Max1238:
 
         cfg = self._build_config_byte(scan, end_ch, mode)
         n_results = (end_ch - base + 1)
-        raw = self._xfer([cfg], 2 * n_results)
+        raw = self._xfer(cfg, 2 * n_results)
 
         words = [((raw[i] & 0x0F) << 8) | raw[i + 1] for i in range(0, len(raw), 2)]
         drop = start_channel - base
-        return words[drop:drop + count]
+        return words[drop : drop + count]
+
+    # Optional: context management / cleanup
+    def close(self) -> None:
+        try:
+            self.bus.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "Max1238":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
